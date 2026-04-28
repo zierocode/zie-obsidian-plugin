@@ -7,7 +7,7 @@ export interface ZieObsidianSettings {
 }
 
 export const DEFAULT_SETTINGS: ZieObsidianSettings = {
-    serverUrl: 'https://zie-vps.zie-agent.cloud:8770',
+    serverUrl: 'https://obsidian.zie-agent.cloud',
     apiKey: '',
     vaultName: 'zie',
 };
@@ -29,7 +29,7 @@ export class ZieObsidianSettingTab extends PluginSettingTab {
             .setName('Server URL')
             .setDesc('zie-obsidian server URL')
             .addText(text => text
-                .setPlaceholder('https://zie-vps.zie-agent.cloud:8770')
+                .setPlaceholder('https://obsidian.zie-agent.cloud')
                 .setValue(this.plugin.settings.serverUrl)
                 .onChange(async (value) => {
                     this.plugin.settings.serverUrl = value;

@@ -6,5 +6,6 @@
   "description": "Realtime vault sync + AI Agent sidebar. Connects to zie-obsidian server on VPS.",
   "author": "zie",
   "authorUrl": "",
-  "isDesktopOnly": false
+  "isDesktopOnly": false,
+  "main": "main.js"
 }
