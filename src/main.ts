@@ -31,7 +31,11 @@ export default class ZieObsidianPlugin extends Plugin {
 
         this.syncEngine = new SyncEngine(this.app.vault, this.settings);
         this.syncEngine.start(this.app.vault.getName() + '-plugin');
-        this.syncEngine.fullSync();
+        try {
+            await this.syncEngine.fullSync();
+        } catch (e) {
+            console.error('zie-obsidian: sync failed', e);
+        }
     }
 
     async activateView() {
