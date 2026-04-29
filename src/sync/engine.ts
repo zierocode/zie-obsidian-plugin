@@ -140,9 +140,10 @@ export class SyncEngine {
     // --- Download with hash tracking ---
 
     async downloadFile(path: string): Promise<void> {
-        if (this._pendingDownloads.has(path)) return;
-        if (this._isOpenInEditor(path)) return;
+        if (this._pendingDownloads.has(path)) { console.log(`[zie] downloadFile: SKIP pending path=${path}`); return; }
+        if (this._isOpenInEditor(path)) { console.log(`[zie] downloadFile: SKIP openInEditor path=${path}`); return; }
 
+        console.log(`[zie] downloadFile: start path=${path}`);
         const promise = this._doDownload(path);
         this._pendingDownloads.set(path, promise);
         try {
@@ -154,6 +155,7 @@ export class SyncEngine {
 
     private async _doDownload(path: string): Promise<void> {
         const { serverUrl, apiKey } = this.settings;
+        console.log(`[zie] _doDownload: fetching path=${path}`);
         const resp = await fetch(
             `${serverUrl}/api/vault/read?path=${encodeURIComponent(path)}`,
             { headers: { 'Authorization': `Bearer ${apiKey}` } },
@@ -161,11 +163,17 @@ export class SyncEngine {
         if (!resp.ok) throw new Error(`download failed: ${resp.status}`);
 
         const data = await resp.json();
-        if (!data.content) return;
+        console.log(`[zie] _doDownload: got path=${path} hasContent=${!!data.content} serverHash=${data.hash?.slice(0,8)} localHash=${this._lastKnownHashes.get(path)?.slice(0,8)}`);
 
-        if (this._lastKnownHashes.get(path) === data.hash) return;
+        if (!data.content) { console.log(`[zie] _doDownload: SKIP no content`); return; }
+
+        if (this._lastKnownHashes.get(path) === data.hash) {
+            console.log(`[zie] _doDownload: SKIP hash match`);
+            return;
+        }
 
         const existing = this.vault.getAbstractFileByPath(path);
+        console.log(`[zie] _doDownload: writing existing=${!!existing}`);
         if (existing) {
             await this.vault.modify(existing, data.content);
         } else {
@@ -173,11 +181,13 @@ export class SyncEngine {
         }
 
         this._lastKnownHashes.set(path, data.hash);
+        console.log(`[zie] _doDownload: DONE path=${path}`);
     }
 
     // --- Message queue (never drops) ---
 
     async handleMessage(msg: any) {
+        console.log(`[zie] WS msg: type=${msg.type} path=${msg.path} queue=${this._messageQueue.length + 1}`);
         this._messageQueue.push(msg);
         if (!this._processingQueue) {
             this._processQueue();
@@ -188,6 +198,7 @@ export class SyncEngine {
         this._processingQueue = true;
         while (this._messageQueue.length > 0) {
             const msg = this._messageQueue.shift()!;
+            console.log(`[zie] processQueue: type=${msg.type} path=${msg.path} remaining=${this._messageQueue.length}`);
             try {
                 if (msg.type === 'file_changed') {
                     await this.downloadFile(msg.path);
@@ -198,7 +209,7 @@ export class SyncEngine {
                     }
                 }
             } catch (e) {
-                console.error('zie-obsidian: handleMessage error', e);
+                console.error('[zie] handleMessage error', e);
             }
         }
         this._processingQueue = false;
