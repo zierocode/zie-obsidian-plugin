@@ -41,6 +41,7 @@ export class SyncEngine {
     private _pendingDownloads = new Map<string, Promise<void>>();
     private _lastKnownHashes = new Map<string, string>();
     private _lastSyncTime = 0;
+    private _suppressUpload = new Set<string>();
     private _pollTimer: ReturnType<typeof setInterval> | null = null;
     private _noticeCount = 0;
 
@@ -141,6 +142,12 @@ export class SyncEngine {
         const content = await this.vault.read(file);
         const hash = await sha256(content);
 
+        if (this._suppressUpload.has(path)) {
+            console.log(`[zie] upload SKIP suppress path=${path}`);
+            this._lastKnownHashes.set(path, hash); // still track hash for future
+            return;
+        }
+
         if (this._lastKnownHashes.get(path) === hash) {
             console.log(`[zie] upload SKIP hash-match path=${path}`);
             return;
@@ -202,6 +209,10 @@ export class SyncEngine {
             console.log(`[zie] download SKIP hash-match path=${path}`);
             return;
         }
+
+        // Suppress re-upload triggered by our own vault.modify (belt-and-suspenders with hash check)
+        this._suppressUpload.add(path);
+        setTimeout(() => this._suppressUpload.delete(path), 5000);
 
         // Set hash BEFORE vault write — modify event fires synchronously
         this._lastKnownHashes.set(path, data.hash);
