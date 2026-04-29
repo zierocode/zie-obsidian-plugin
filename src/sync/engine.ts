@@ -174,10 +174,6 @@ export class SyncEngine {
             console.log(`[zie] download SKIP pending path=${path}`);
             return;
         }
-        if (this._isOpenInEditor(path)) {
-            console.log(`[zie] download SKIP open-in-editor path=${path}`);
-            return;
-        }
 
         console.log(`[zie] download START path=${path}`);
         const promise = this._doDownload(path);
@@ -208,6 +204,19 @@ export class SyncEngine {
         if (this._lastKnownHashes.get(path) === data.hash) {
             console.log(`[zie] download SKIP hash-match path=${path}`);
             return;
+        }
+
+        // If file is open in editor, only skip if user has local edits (hash diverged)
+        if (this._isOpenInEditor(path) && this._lastKnownHashes.has(path)) {
+            const localFile = this.vault.getAbstractFileByPath(path);
+            if (localFile) {
+                const localContent = await this.vault.read(localFile);
+                const localHash = await sha256(localContent);
+                if (localHash !== this._lastKnownHashes.get(path)) {
+                    console.log(`[zie] download SKIP local-edits path=${path}`);
+                    return;
+                }
+            }
         }
 
         // Suppress re-upload triggered by our own vault.modify (belt-and-suspenders with hash check)

@@ -1,7 +1,7 @@
 {
   "id": "zie-obsidian-sync",
   "name": "zie-obsidian",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "minAppVersion": "1.5.0",
   "description": "Realtime vault sync + AI Agent sidebar. Connects to zie-obsidian server on VPS.",
   "author": "zie",
