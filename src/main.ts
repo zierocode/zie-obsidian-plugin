@@ -36,6 +36,22 @@ export default class ZieObsidianPlugin extends Plugin {
         } catch (e) {
             console.error('zie-obsidian: sync failed', e);
         }
+
+        // Realtime local → server sync
+        let syncTimer: ReturnType<typeof setTimeout> | null = null;
+        const debouncedSync = () => {
+            if (syncTimer) clearTimeout(syncTimer);
+            syncTimer = setTimeout(async () => {
+                try {
+                    await this.syncEngine.fullSync();
+                } catch (e) {
+                    console.error('zie-obsidian: realtime sync failed', e);
+                }
+            }, 1000);
+        };
+        this.registerEvent(this.app.vault.on('modify', debouncedSync));
+        this.registerEvent(this.app.vault.on('create', debouncedSync));
+        this.registerEvent(this.app.vault.on('delete', debouncedSync));
     }
 
     async activateView() {
