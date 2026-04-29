@@ -104,6 +104,7 @@ export default class ZieObsidianPlugin extends Plugin {
         this.registerEvent(this.app.vault.on('create', (f) => this._scheduleUpload(f.path)));
         this.registerEvent(this.app.vault.on('delete', (f) => {
             this._uploadDebouncers.delete(f.path);
+            this.syncEngine.deleteFile(f.path);
         }));
     }
 

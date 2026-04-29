@@ -34,6 +34,7 @@ export class SyncEngine {
     private _pendingUploads = new Map<string, Promise<void>>();
     private _pendingDownloads = new Map<string, Promise<void>>();
     private _lastKnownHashes = new Map<string, string>();
+    private _lastSyncTime = 0;
     private _pollTimer: ReturnType<typeof setInterval> | null = null;
     private _noticeCount = 0;
 
@@ -52,6 +53,7 @@ export class SyncEngine {
             if (connected) {
                 this._stopPolling();
                 this.onStatusChange?.({ state: 'connected' });
+                this.catchupSync();
             } else {
                 this._startPolling();
                 this.onStatusChange?.({ state: 'disconnected' });
@@ -82,13 +84,15 @@ export class SyncEngine {
         this._pollTimer = setInterval(async () => {
             try {
                 const { serverUrl, apiKey } = this.settings;
-                const resp = await fetch(`${serverUrl}/api/sync/diff?since=0`, {
+                const since = this._lastSyncTime || 0;
+                const resp = await fetch(`${serverUrl}/api/sync/diff?since=${since}`, {
                     headers: { 'Authorization': `Bearer ${apiKey}` },
                 }).then(r => r.json());
                 if (!resp.changes) return;
                 for (const c of resp.changes) {
                     await this.downloadFile(c.path).catch(() => {});
                 }
+                if (resp.server_time) this._lastSyncTime = resp.server_time;
             } catch { /* poll failed, will retry next interval */ }
         }, 30000);
     }
@@ -216,6 +220,42 @@ export class SyncEngine {
         console.log(`[zie] download DONE path=${path}`);
     }
 
+    // --- Delete sync ---
+
+    async deleteFile(path: string): Promise<void> {
+        const { serverUrl, apiKey } = this.settings;
+        try {
+            const resp = await fetch(`${serverUrl}/api/vault/delete?path=${encodeURIComponent(path)}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${apiKey}` },
+            });
+            if (!resp.ok) throw new Error(`delete failed: ${resp.status}`);
+            this._lastKnownHashes.delete(path);
+            this._notify(`✕ ${path}`);
+        } catch (e) {
+            console.error('[zie] delete sync error', e);
+        }
+    }
+
+    // --- Catch-up sync after reconnect ---
+
+    async catchupSync(): Promise<void> {
+        if (!this._lastSyncTime) return; // fullSync hasn't completed yet
+        try {
+            const { serverUrl, apiKey } = this.settings;
+            const since = this._lastSyncTime;
+            const resp = await fetch(`${serverUrl}/api/sync/diff?since=${since}`, {
+                headers: { 'Authorization': `Bearer ${apiKey}` },
+            }).then(r => r.json());
+            if (!resp.changes?.length) return;
+            console.log(`[zie] catchup since=${since} count=${resp.changes.length}`);
+            for (const c of resp.changes) {
+                await this.downloadFile(c.path).catch(() => {});
+            }
+            if (resp.server_time) this._lastSyncTime = resp.server_time;
+        } catch { /* will catch up on next poll or fullSync */ }
+    }
+
     // --- Direct message handling (no queue — downloadFile has internal guards) ---
 
     handleMessage(msg: any) {
@@ -228,7 +268,7 @@ export class SyncEngine {
             if (!this._isOpenInEditor(msg.path)) {
                 const file = this.vault.getAbstractFileByPath(msg.path);
                 if (file) {
-                    this.vault.trash(file, true).catch(() => {});
+                    this.vault.trash(file, false).catch(() => {});
                 }
             }
         }
@@ -278,9 +318,9 @@ export class SyncEngine {
             }
         }
 
-        this._lastKnownHashes.clear();
-
         console.log(`zie-obsidian: sync done — ↓${dlCount} ↑${ulCount}`);
+
+        if (resp.server_time) this._lastSyncTime = resp.server_time;
 
         this.onStatusChange?.({
             state: 'idle',
