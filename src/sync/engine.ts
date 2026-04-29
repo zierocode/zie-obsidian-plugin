@@ -6,6 +6,7 @@ export class SyncEngine {
     private transport: SyncTransport;
     private vault: any;
     private settings: any;
+    private _syncing = false;
 
     constructor(vault: any, settings: any) {
         this.vault = vault;
@@ -22,52 +23,59 @@ export class SyncEngine {
     }
 
     async fullSync() {
-        const localFiles = await getLocalFiles(this.vault);
-        const serverUrl = this.settings.serverUrl;
-        const apiKey = this.settings.apiKey;
+        if (this._syncing) return;
+        this._syncing = true;
+        try {
+            const localFiles = await getLocalFiles(this.vault);
+            const serverUrl = this.settings.serverUrl;
+            const apiKey = this.settings.apiKey;
 
-        const resp = await retry(() =>
-            fetch(`${serverUrl}/api/sync/diff?since=0`, {
-                headers: { 'Authorization': `Bearer ${apiKey}` }
-            }).then(r => r.json())
-        );
+            const resp = await retry(() =>
+                fetch(`${serverUrl}/api/sync/diff?since=0`, {
+                    headers: { 'Authorization': `Bearer ${apiKey}` }
+                }).then(r => r.json())
+            );
 
-        const { toDownload, toUpload } = computeDiff(localFiles, resp.changes);
+            const { toDownload, toUpload } = computeDiff(localFiles, resp.changes);
 
-        for (const path of toDownload) {
-            const fileResp = await fetch(`${serverUrl}/api/vault/read?path=${encodeURIComponent(path)}`, {
-                headers: { 'Authorization': `Bearer ${apiKey}` }
-            });
-            const data = await fileResp.json();
-            if (data.content) {
-                const existing = this.vault.getAbstractFileByPath(path);
-                if (existing) {
-                    await this.vault.modify(existing, data.content);
-                } else {
-                    await this.vault.create(path, data.content);
+            for (const path of toDownload) {
+                const fileResp = await fetch(`${serverUrl}/api/vault/read?path=${encodeURIComponent(path)}`, {
+                    headers: { 'Authorization': `Bearer ${apiKey}` }
+                });
+                const data = await fileResp.json();
+                if (data.content) {
+                    const existing = this.vault.getAbstractFileByPath(path);
+                    if (existing) {
+                        await this.vault.modify(existing, data.content);
+                    } else {
+                        await this.vault.create(path, data.content);
+                    }
                 }
             }
-        }
 
-        for (const path of toUpload) {
-            const file = this.vault.getAbstractFileByPath(path);
-            if (file) {
-                const content = await this.vault.read(file);
-                await fetch(`${serverUrl}/api/vault/write`, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}`
-                    },
-                    body: JSON.stringify({ path, content })
-                });
+            for (const path of toUpload) {
+                const file = this.vault.getAbstractFileByPath(path);
+                if (file) {
+                    const content = await this.vault.read(file);
+                    await fetch(`${serverUrl}/api/vault/write`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${apiKey}`
+                        },
+                        body: JSON.stringify({ path, content })
+                    });
+                }
             }
-        }
 
-        console.log(`zie-obsidian: sync done — ↓${toDownload.length} ↑${toUpload.length}`);
+            console.log(`zie-obsidian: sync done — ↓${toDownload.length} ↑${toUpload.length}`);
+        } finally {
+            this._syncing = false;
+        }
     }
 
     async handleMessage(msg: any) {
+        if (this._syncing) return;
         if (msg.type === 'file_changed') {
             await this.fullSync();
         } else if (msg.type === 'file_deleted') {
