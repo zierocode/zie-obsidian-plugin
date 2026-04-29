@@ -293,11 +293,10 @@ export class SyncEngine {
                 console.error('[zie] download error', e);
             });
         } else if (msg.type === 'file_deleted') {
-            if (!this._isOpenInEditor(msg.path)) {
-                const file = this.vault.getAbstractFileByPath(msg.path);
-                if (file) {
-                    this.vault.trash(file, false).catch(() => {});
-                }
+            const file = this.vault.getAbstractFileByPath(msg.path);
+            if (file) {
+                this._lastKnownHashes.delete(msg.path);
+                this.vault.trash(file, false).catch(() => {});
             }
         }
     }
