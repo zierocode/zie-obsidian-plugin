@@ -93,12 +93,6 @@ export default class ZieObsidianPlugin extends Plugin {
             };
         }
 
-        try {
-            await this.syncEngine.fullSync();
-        } catch (e) {
-            console.error('zie-obsidian: initial sync failed', e);
-        }
-
         // Local edit → upload (per-file debounce, iCloud-aware)
         this.registerEvent(this.app.vault.on('modify', (f) => this._scheduleUpload(f.path)));
         this.registerEvent(this.app.vault.on('create', (f) => this._scheduleUpload(f.path)));
@@ -106,6 +100,11 @@ export default class ZieObsidianPlugin extends Plugin {
             this._uploadDebouncers.delete(f.path);
             this.syncEngine.deleteFile(f.path);
         }));
+
+        // Kick off sync in background — don't block onload
+        this.syncEngine.fullSync().catch(e => {
+            console.error('zie-obsidian: initial sync failed', e);
+        });
     }
 
     async activateView() {

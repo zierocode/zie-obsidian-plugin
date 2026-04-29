@@ -11,6 +11,12 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
     return chunks;
 }
 
+function fetchWithTimeout(url: string, opts: RequestInit, timeoutMs = 10000): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 async function sha256(text: string): Promise<string> {
     const data = new TextEncoder().encode(text);
     const hash = await crypto.subtle.digest('SHA-256', data);
@@ -283,7 +289,7 @@ export class SyncEngine {
         const { serverUrl, apiKey } = this.settings;
 
         const resp = await retry(() =>
-            fetch(`${serverUrl}/api/sync/diff?since=0`, {
+            fetchWithTimeout(`${serverUrl}/api/sync/diff?since=0`, {
                 headers: { 'Authorization': `Bearer ${apiKey}` },
             }).then(r => r.json()),
         );
