@@ -29,29 +29,36 @@ export default class ZieObsidianPlugin extends Plugin {
             callback: () => new Notice('zie-obsidian active'),
         });
 
-        this.syncEngine = new SyncEngine(this.app.vault, this.settings);
+        this.syncEngine = new SyncEngine(this.app.vault, this.app.workspace, this.settings);
         this.syncEngine.start(this.app.vault.getName() + '-plugin');
         try {
             await this.syncEngine.fullSync();
         } catch (e) {
-            console.error('zie-obsidian: sync failed', e);
+            console.error('zie-obsidian: initial sync failed', e);
         }
 
-        // Realtime local → server sync
-        let syncTimer: ReturnType<typeof setTimeout> | null = null;
-        const debouncedSync = () => {
-            if (syncTimer) clearTimeout(syncTimer);
-            syncTimer = setTimeout(async () => {
+        // Local edit → upload only (1s debounce, no download)
+        let uploadTimer: ReturnType<typeof setTimeout> | null = null;
+        this.registerEvent(this.app.vault.on('modify', (file) => {
+            if (uploadTimer) clearTimeout(uploadTimer);
+            uploadTimer = setTimeout(async () => {
                 try {
-                    await this.syncEngine.fullSync();
+                    await this.syncEngine.uploadFile(file.path);
                 } catch (e) {
-                    console.error('zie-obsidian: realtime sync failed', e);
+                    console.error('zie-obsidian: upload failed', e);
                 }
             }, 1000);
-        };
-        this.registerEvent(this.app.vault.on('modify', debouncedSync));
-        this.registerEvent(this.app.vault.on('create', debouncedSync));
-        this.registerEvent(this.app.vault.on('delete', debouncedSync));
+        }));
+        this.registerEvent(this.app.vault.on('create', (file) => {
+            if (uploadTimer) clearTimeout(uploadTimer);
+            uploadTimer = setTimeout(async () => {
+                try {
+                    await this.syncEngine.uploadFile(file.path);
+                } catch (e) {
+                    console.error('zie-obsidian: upload failed', e);
+                }
+            }, 1000);
+        }));
     }
 
     async activateView() {
