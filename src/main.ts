@@ -40,12 +40,11 @@ export default class ZieObsidianPlugin extends Plugin {
     async onload() {
         await this.loadSettings();
 
-        // Unique device ID for multi-device sync
-        this.deviceId = this.settings.deviceId;
+        // Unique device ID stored in localStorage (NOT settings — would sync via iCloud)
+        this.deviceId = localStorage.getItem('zie-device-id') || '';
         if (!this.deviceId) {
             this.deviceId = Math.random().toString(36).slice(2, 10);
-            this.settings.deviceId = this.deviceId;
-            await this.saveSettings();
+            localStorage.setItem('zie-device-id', this.deviceId);
         }
 
         this.addSettingTab(new ZieObsidianSettingTab(this.app, this));
@@ -129,6 +128,6 @@ export default class ZieObsidianPlugin extends Plugin {
     }
 
     async saveSettings() {
-        await this.saveData(Object.assign({}, this.settings, { deviceId: this.deviceId }));
+        await this.saveData(this.settings);
     }
 }
