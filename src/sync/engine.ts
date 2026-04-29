@@ -8,6 +8,7 @@ export class SyncEngine {
     private workspace: any;
     private settings: any;
     private _syncing = false;
+    private _recentlyDownloaded = new Set<string>();
 
     constructor(vault: any, workspace: any, settings: any) {
         this.vault = vault;
@@ -76,6 +77,10 @@ export class SyncEngine {
     }
 
     async uploadFile(path: string) {
+        if (this._recentlyDownloaded.has(path)) {
+            this._recentlyDownloaded.delete(path);
+            return;
+        }
         const { serverUrl, apiKey } = this.settings;
         const file = this.vault.getAbstractFileByPath(path);
         if (!file) return;
@@ -92,6 +97,7 @@ export class SyncEngine {
 
     async downloadFile(path: string) {
         if (this._isOpenInEditor(path)) return;
+        this._recentlyDownloaded.add(path);
         const { serverUrl, apiKey } = this.settings;
         const fileResp = await fetch(`${serverUrl}/api/vault/read?path=${encodeURIComponent(path)}`, {
             headers: { 'Authorization': `Bearer ${apiKey}` }
