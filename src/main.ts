@@ -23,7 +23,7 @@ export default class ZieObsidianPlugin extends Plugin {
     private _scheduleUpload(path: string) {
         let db = this._uploadDebouncers.get(path);
         if (!db) {
-            const delay = this._isIcloudVault ? 2000 : 500;
+            const delay = this._isIcloudVault ? 2000 : 300;
             db = debounce(async (p: string) => {
                 this._uploadDebouncers.delete(p);
                 try {
