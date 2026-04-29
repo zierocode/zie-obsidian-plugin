@@ -37,8 +37,8 @@ export class SyncEngine {
     private vault: any;
     private workspace: any;
     private settings: any;
-    private _pendingUploads = new Map<string, Promise<void>>();
-    private _pendingDownloads = new Map<string, Promise<void>>();
+    private _activeUploads = new Set<string>();
+    private _activeDownloads = new Set<string>();
     private _lastKnownHashes = new Map<string, string>();
     private _lastSyncTime = 0;
     private _suppressUpload = new Set<string>();
@@ -122,15 +122,12 @@ export class SyncEngine {
     // --- Upload with hash check ---
 
     async uploadFile(path: string): Promise<void> {
-        if (this._pendingUploads.has(path)) {
-            return this._pendingUploads.get(path)!;
-        }
-        const promise = this._doUpload(path);
-        this._pendingUploads.set(path, promise);
+        if (this._activeUploads.has(path)) return;
+        this._activeUploads.add(path);
         try {
-            await promise;
+            await this._doUpload(path);
         } finally {
-            this._pendingUploads.delete(path);
+            this._activeUploads.delete(path);
         }
     }
 
@@ -170,18 +167,17 @@ export class SyncEngine {
     // --- Download with hash tracking ---
 
     async downloadFile(path: string): Promise<void> {
-        if (this._pendingDownloads.has(path)) {
-            console.log(`[zie] download SKIP pending path=${path}`);
+        if (this._activeDownloads.has(path)) {
+            console.log(`[zie] download SKIP active path=${path}`);
             return;
         }
+        this._activeDownloads.add(path);
 
         console.log(`[zie] download START path=${path}`);
-        const promise = this._doDownload(path);
-        this._pendingDownloads.set(path, promise);
         try {
-            await promise;
+            await this._doDownload(path);
         } finally {
-            this._pendingDownloads.delete(path);
+            this._activeDownloads.delete(path);
         }
     }
 
