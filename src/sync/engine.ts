@@ -172,6 +172,10 @@ export class SyncEngine {
             return;
         }
 
+        // Set hash BEFORE writing to vault — modify event fires synchronously
+        // and we need the hash guard active before _scheduleUpload triggers
+        this._lastKnownHashes.set(path, data.hash);
+
         const existing = this.vault.getAbstractFileByPath(path);
         console.log(`[zie] _doDownload: writing existing=${!!existing}`);
         if (existing) {
@@ -180,7 +184,6 @@ export class SyncEngine {
             await this.vault.create(path, data.content);
         }
 
-        this._lastKnownHashes.set(path, data.hash);
         console.log(`[zie] _doDownload: DONE path=${path}`);
     }
 
@@ -196,23 +199,26 @@ export class SyncEngine {
 
     private async _processQueue() {
         this._processingQueue = true;
-        while (this._messageQueue.length > 0) {
-            const msg = this._messageQueue.shift()!;
-            console.log(`[zie] processQueue: type=${msg.type} path=${msg.path} remaining=${this._messageQueue.length}`);
-            try {
-                if (msg.type === 'file_changed') {
-                    await this.downloadFile(msg.path);
-                } else if (msg.type === 'file_deleted') {
-                    if (!this._isOpenInEditor(msg.path)) {
-                        const file = this.vault.getAbstractFileByPath(msg.path);
-                        if (file) await this.vault.trash(file, true);
+        try {
+            while (this._messageQueue.length > 0) {
+                const msg = this._messageQueue.shift()!;
+                console.log(`[zie] processQueue: type=${msg.type} path=${msg.path} remaining=${this._messageQueue.length}`);
+                try {
+                    if (msg.type === 'file_changed') {
+                        await this.downloadFile(msg.path);
+                    } else if (msg.type === 'file_deleted') {
+                        if (!this._isOpenInEditor(msg.path)) {
+                            const file = this.vault.getAbstractFileByPath(msg.path);
+                            if (file) await this.vault.trash(file, true);
+                        }
                     }
+                } catch (e) {
+                    console.error('[zie] handleMessage error', e);
                 }
-            } catch (e) {
-                console.error('[zie] handleMessage error', e);
             }
+        } finally {
+            this._processingQueue = false;
         }
-        this._processingQueue = false;
     }
 
     // --- Full sync with parallel operations ---
