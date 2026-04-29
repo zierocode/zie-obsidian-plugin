@@ -1,4 +1,4 @@
-import { PluginSettingTab, Setting, App } from 'obsidian';
+import { PluginSettingTab, Setting, App, Notice } from 'obsidian';
 
 export interface ZieObsidianSettings {
     serverUrl: string;
@@ -50,5 +50,50 @@ export class ZieObsidianSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     });
             });
+
+        new Setting(containerEl)
+            .setName('Test Connection')
+            .setDesc('Check if the server is reachable')
+            .addButton(btn => btn
+                .setButtonText('Test')
+                .onClick(async () => {
+                    try {
+                        const resp = await fetch(`${this.plugin.settings.serverUrl}/health`);
+                        if (resp.ok) {
+                            new Notice('zie-obsidian: Server is reachable');
+                        } else {
+                            new Notice(`zie-obsidian: Server returned ${resp.status}`);
+                        }
+                    } catch {
+                        new Notice('zie-obsidian: Connection failed');
+                    }
+                }));
+
+        new Setting(containerEl)
+            .setName('Force Full Sync')
+            .setDesc('Manually trigger a full vault sync')
+            .addButton(btn => btn
+                .setButtonText('Sync Now')
+                .onClick(async () => {
+                    new Notice('zie-obsidian: Full sync started...');
+                    try {
+                        const r = await this.plugin.syncEngine.fullSync();
+                        new Notice(`zie-obsidian: Sync done — ↓${r.downloaded} ↑${r.uploaded}`);
+                    } catch {
+                        new Notice('zie-obsidian: Sync failed');
+                    }
+                }));
+
+        const icloud = this._detectIcloud();
+        new Setting(containerEl)
+            .setName('Device ID')
+            .setDesc(`Device: ${this.plugin.deviceId}${icloud ? ' | iCloud vault detected' : ''}`);
+    }
+
+    private _detectIcloud(): boolean {
+        try {
+            const bp = (this.plugin.app.vault.adapter as any).getBasePath?.() || '';
+            return bp.includes('Mobile Documents');
+        } catch { return false; }
     }
 }

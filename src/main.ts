@@ -1,14 +1,41 @@
-import { Plugin, Notice } from 'obsidian';
+import { Plugin, Notice, Platform, debounce, Debouncer } from 'obsidian';
 import { ZieObsidianSettings, DEFAULT_SETTINGS, ZieObsidianSettingTab } from './settings';
 import { SyncEngine } from './sync/engine';
 import { AISidebarView, AI_SIDEBAR_VIEW_TYPE } from './ai/sidebar';
 import { registerCommands } from './ai/commands';
 import { AIClient } from './ai/client';
+import { SyncStatusBar } from './status';
 
 export default class ZieObsidianPlugin extends Plugin {
     settings!: ZieObsidianSettings;
     syncEngine!: SyncEngine;
     deviceId!: string;
+    statusBar?: SyncStatusBar;
+    private _uploadDebouncers = new Map<string, Debouncer<[string], void>>();
+
+    private get _isIcloudVault(): boolean {
+        try {
+            const bp = (this.app.vault.adapter as any).getBasePath?.() || '';
+            return bp.includes('Mobile Documents');
+        } catch { return false; }
+    }
+
+    private _scheduleUpload(path: string) {
+        let db = this._uploadDebouncers.get(path);
+        if (!db) {
+            const delay = this._isIcloudVault ? 2000 : 500;
+            db = debounce(async (p: string) => {
+                this._uploadDebouncers.delete(p);
+                try {
+                    await this.syncEngine.uploadFile(p);
+                } catch (e) {
+                    console.error('zie-obsidian: upload failed', e);
+                }
+            }, delay, true);
+            this._uploadDebouncers.set(path, db);
+        }
+        db(path);
+    }
 
     async onload() {
         await this.loadSettings();
@@ -41,33 +68,42 @@ export default class ZieObsidianPlugin extends Plugin {
 
         this.syncEngine = new SyncEngine(this.app.vault, this.app.workspace, this.settings);
         this.syncEngine.start(this.app.vault.getName() + '-' + this.deviceId);
+
+        // Status bar (desktop only)
+        if (Platform.isDesktop) {
+            this.statusBar = new SyncStatusBar(this.addStatusBarItem());
+            this.statusBar.el.addEventListener('click', () => {
+                this.statusBar?.setSyncing(0, 0);
+                this.syncEngine.fullSync().then(() => {
+                    this.statusBar?.setIdle();
+                }).catch(() => {
+                    this.statusBar?.setConnected();
+                });
+            });
+            this.syncEngine.onStatusChange = (s) => {
+                if (!this.statusBar) return;
+                switch (s.state) {
+                    case 'connected': this.statusBar.setConnected(); break;
+                    case 'disconnected': this.statusBar.setDisconnected(); break;
+                    case 'syncing':
+                        this.statusBar.setSyncing(s.uploaded ?? 0, s.downloaded ?? 0);
+                        break;
+                    case 'idle': this.statusBar.setIdle(); break;
+                }
+            };
+        }
+
         try {
             await this.syncEngine.fullSync();
         } catch (e) {
             console.error('zie-obsidian: initial sync failed', e);
         }
 
-        // Local edit → upload only (1s debounce)
-        let uploadTimer: ReturnType<typeof setTimeout> | null = null;
-        this.registerEvent(this.app.vault.on('modify', (file) => {
-            if (uploadTimer) clearTimeout(uploadTimer);
-            uploadTimer = setTimeout(async () => {
-                try {
-                    await this.syncEngine.uploadFile(file.path);
-                } catch (e) {
-                    console.error('zie-obsidian: upload failed', e);
-                }
-            }, 1000);
-        }));
-        this.registerEvent(this.app.vault.on('create', (file) => {
-            if (uploadTimer) clearTimeout(uploadTimer);
-            uploadTimer = setTimeout(async () => {
-                try {
-                    await this.syncEngine.uploadFile(file.path);
-                } catch (e) {
-                    console.error('zie-obsidian: upload failed', e);
-                }
-            }, 1000);
+        // Local edit → upload (per-file debounce, iCloud-aware)
+        this.registerEvent(this.app.vault.on('modify', (f) => this._scheduleUpload(f.path)));
+        this.registerEvent(this.app.vault.on('create', (f) => this._scheduleUpload(f.path)));
+        this.registerEvent(this.app.vault.on('delete', (f) => {
+            this._uploadDebouncers.delete(f.path);
         }));
     }
 

@@ -54,3 +54,38 @@
     font-size: 11px;
     padding: 2px 8px;
 }
+
+/* Status Bar */
+.zie-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+.zie-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.zie-dot-green { background: #4caf50; }
+
+.zie-dot-yellow {
+    background: #ff9800;
+    animation: zie-pulse 1s infinite;
+}
+
+.zie-dot-red { background: #f44336; }
+
+@keyframes zie-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+.zie-status-text {
+    font-size: 12px;
+    color: var(--text-muted);
+}
