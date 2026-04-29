@@ -8,9 +8,18 @@ import { AIClient } from './ai/client';
 export default class ZieObsidianPlugin extends Plugin {
     settings!: ZieObsidianSettings;
     syncEngine!: SyncEngine;
+    deviceId!: string;
 
     async onload() {
         await this.loadSettings();
+
+        // Unique device ID for multi-device sync
+        if (!this.settings.deviceId) {
+            this.settings.deviceId = Math.random().toString(36).slice(2, 10);
+            await this.saveSettings();
+        }
+        this.deviceId = this.settings.deviceId;
+
         this.addSettingTab(new ZieObsidianSettingTab(this.app, this));
 
         this.registerView(AI_SIDEBAR_VIEW_TYPE,
@@ -30,14 +39,14 @@ export default class ZieObsidianPlugin extends Plugin {
         });
 
         this.syncEngine = new SyncEngine(this.app.vault, this.app.workspace, this.settings);
-        this.syncEngine.start(this.app.vault.getName() + '-plugin');
+        this.syncEngine.start(this.app.vault.getName() + '-' + this.deviceId);
         try {
             await this.syncEngine.fullSync();
         } catch (e) {
             console.error('zie-obsidian: initial sync failed', e);
         }
 
-        // Local edit → upload only (1s debounce, no download)
+        // Local edit → upload only (1s debounce)
         let uploadTimer: ReturnType<typeof setTimeout> | null = null;
         this.registerEvent(this.app.vault.on('modify', (file) => {
             if (uploadTimer) clearTimeout(uploadTimer);
@@ -83,6 +92,6 @@ export default class ZieObsidianPlugin extends Plugin {
     }
 
     async saveSettings() {
-        await this.saveData(this.settings);
+        await this.saveData(Object.assign({}, this.settings, { deviceId: this.deviceId }));
     }
 }
