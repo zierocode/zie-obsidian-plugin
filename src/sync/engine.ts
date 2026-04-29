@@ -35,6 +35,7 @@ export class SyncEngine {
     private _lastKnownHashes = new Map<string, string>();
     private _messageQueue: any[] = [];
     private _processingQueue = false;
+    private _pollTimer: ReturnType<typeof setInterval> | null = null;
 
     onStatusChange?: (status: SyncStatus) => void;
 
@@ -48,7 +49,13 @@ export class SyncEngine {
             (msg) => this.handleMessage(msg),
         );
         this.transport.onConnectionChange = (connected) => {
-            this.onStatusChange?.({ state: connected ? 'connected' : 'disconnected' });
+            if (connected) {
+                this._stopPolling();
+                this.onStatusChange?.({ state: 'connected' });
+            } else {
+                this._startPolling();
+                this.onStatusChange?.({ state: 'disconnected' });
+            }
         };
     }
 
@@ -57,7 +64,31 @@ export class SyncEngine {
     }
 
     stop() {
+        this._stopPolling();
         this.transport.disconnect();
+    }
+
+    private _startPolling() {
+        if (this._pollTimer) return;
+        this._pollTimer = setInterval(async () => {
+            try {
+                const { serverUrl, apiKey } = this.settings;
+                const resp = await fetch(`${serverUrl}/api/sync/diff?since=0`, {
+                    headers: { 'Authorization': `Bearer ${apiKey}` },
+                }).then(r => r.json());
+                if (!resp.changes) return;
+                for (const c of resp.changes) {
+                    await this.downloadFile(c.path).catch(() => {});
+                }
+            } catch { /* poll failed, will retry next interval */ }
+        }, 30000);
+    }
+
+    private _stopPolling() {
+        if (this._pollTimer) {
+            clearInterval(this._pollTimer);
+            this._pollTimer = null;
+        }
     }
 
     private _isOpenInEditor(path: string): boolean {
