@@ -3,15 +3,11 @@ import { PluginSettingTab, Setting, App, Notice } from 'obsidian';
 export interface ZieObsidianSettings {
     serverUrl: string;
     apiKey: string;
-    vaultName: string;
-    deviceId: string;
 }
 
 export const DEFAULT_SETTINGS: ZieObsidianSettings = {
     serverUrl: 'https://obsidian.zie-agent.cloud',
     apiKey: '',
-    vaultName: 'zie',
-    deviceId: '',
 };
 
 export class ZieObsidianSettingTab extends PluginSettingTab {

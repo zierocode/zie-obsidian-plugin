@@ -9,9 +9,9 @@ export class AISidebarView extends ItemView {
     private inputEl!: HTMLTextAreaElement;
     private history: Array<{role: string; content: string}> = [];
 
-    constructor(leaf: WorkspaceLeaf, serverUrl: string, apiKey: string) {
+    constructor(leaf: WorkspaceLeaf, aiClient: AIClient) {
         super(leaf);
-        this.aiClient = new AIClient(serverUrl, apiKey);
+        this.aiClient = aiClient;
     }
 
     getViewType(): string { return AI_SIDEBAR_VIEW_TYPE; }
@@ -59,22 +59,32 @@ export class AISidebarView extends ItemView {
         const assistantDiv = this.addMessage('assistant', '');
         let fullText = '';
 
-        await this.aiClient.chat(
-            text, this.history,
-            (token) => {
-                fullText += token;
-                assistantDiv.setText(fullText);
-            },
-            () => {
-                this.history.push({ role: 'assistant', content: fullText });
-            }
-        );
+        try {
+            await this.aiClient.chat(
+                text, this.history,
+                (token) => {
+                    fullText += token;
+                    assistantDiv.setText(fullText);
+                },
+                () => {
+                    this.history.push({ role: 'assistant', content: fullText });
+                }
+            );
+        } catch {
+            assistantDiv.setText('[Error: AI request failed — check server connection]');
+        }
     }
 
     addMessage(role: string, content: string): HTMLElement {
         const el = this.messagesContainer.createDiv(`zie-chat-message ${role}`);
         el.setText(content);
         this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+
+        // Cap history to last 100 messages
+        if (this.history.length > 100) {
+            this.history = this.history.slice(-50);
+        }
+
         return el;
     }
 }

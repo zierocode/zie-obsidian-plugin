@@ -1,7 +1,8 @@
-import { Notice } from 'obsidian';
+import { Notice, Vault, Workspace, TFile } from 'obsidian';
 import { SyncTransport } from './transport';
 import { getLocalFiles, computeDiff } from './differ';
 import { retry } from '../utils/retry';
+import { sha256 } from '../utils/hash';
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
     const chunks: T[][] = [];
@@ -17,14 +18,6 @@ function fetchWithTimeout(url: string, opts: RequestInit, timeoutMs = 10000): Pr
     return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
-async function sha256(text: string): Promise<string> {
-    const data = new TextEncoder().encode(text);
-    const hash = await crypto.subtle.digest('SHA-256', data);
-    return Array.from(new Uint8Array(hash))
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
-}
-
 export interface SyncStatus {
     state: 'idle' | 'syncing' | 'connected' | 'disconnected';
     lastSync?: number;
@@ -34,20 +27,20 @@ export interface SyncStatus {
 
 export class SyncEngine {
     private transport: SyncTransport;
-    private vault: any;
-    private workspace: any;
-    private settings: any;
+    private vault: Vault;
+    private workspace: Workspace;
+    private settings: { serverUrl: string; apiKey: string };
     private _activeUploads = new Set<string>();
     private _activeDownloads = new Set<string>();
     private _lastKnownHashes = new Map<string, string>();
     private _lastSyncTime = 0;
     private _suppressUpload = new Set<string>();
     private _pollTimer: ReturnType<typeof setInterval> | null = null;
-    private _noticeCount = 0;
+    private _polling = false;
 
     onStatusChange?: (status: SyncStatus) => void;
 
-    constructor(vault: any, workspace: any, settings: any) {
+    constructor(vault: Vault, workspace: Workspace, settings: { serverUrl: string; apiKey: string }) {
         this.vault = vault;
         this.workspace = workspace;
         this.settings = settings;
@@ -77,10 +70,11 @@ export class SyncEngine {
         this.transport.disconnect();
     }
 
+    private _noticeCount = 0;
+
     private _notify(msg: string) {
-        // Rate-limit notices to avoid spam (max 1 per 2 seconds)
         this._noticeCount++;
-        if (this._noticeCount <= 3 || this._noticeCount % 10 === 0) {
+        if (this._noticeCount <= 2) {
             new Notice(`zie: ${msg}`, 3000);
         }
         console.log(`[zie] ${msg}`);
@@ -88,19 +82,24 @@ export class SyncEngine {
 
     private _startPolling() {
         if (this._pollTimer) return;
-        this._pollTimer = setInterval(async () => {
-            try {
-                const { serverUrl, apiKey } = this.settings;
-                const since = this._lastSyncTime || 0;
-                const resp = await fetch(`${serverUrl}/api/sync/diff?since=${since}`, {
-                    headers: { 'Authorization': `Bearer ${apiKey}` },
-                }).then(r => r.json());
-                if (!resp.changes) return;
-                for (const c of resp.changes) {
-                    await this.downloadFile(c.path).catch(() => {});
-                }
-                if (resp.server_time) this._lastSyncTime = resp.server_time;
-            } catch { /* poll failed, will retry next interval */ }
+        this._pollTimer = setInterval(() => {
+            if (this._polling) return;
+            this._polling = true;
+            (async () => {
+                try {
+                    const { serverUrl, apiKey } = this.settings;
+                    const since = this._lastSyncTime || 0;
+                    const resp = await fetch(`${serverUrl}/api/sync/diff?since=${since}`, {
+                        headers: { 'Authorization': `Bearer ${apiKey}` },
+                    }).then(r => r.json());
+                    if (!resp.changes) return;
+                    for (const c of resp.changes) {
+                        await this.downloadFile(c.path).catch(() => {});
+                    }
+                    if (resp.server_time) this._lastSyncTime = resp.server_time;
+                } catch { /* poll failed, will retry next interval */ }
+                finally { this._polling = false; }
+            })();
         }, 30000);
     }
 
@@ -113,8 +112,8 @@ export class SyncEngine {
 
     private _isOpenInEditor(path: string): boolean {
         for (const leaf of this.workspace.getLeavesOfType('markdown')) {
-            const view = leaf.view;
-            if (view && view.file && view.file.path === path) return true;
+            const view = leaf.view as any;
+            if (view?.file?.path === path) return true;
         }
         return false;
     }
@@ -133,7 +132,7 @@ export class SyncEngine {
 
     private async _doUpload(path: string): Promise<void> {
         const { serverUrl, apiKey } = this.settings;
-        const file = this.vault.getAbstractFileByPath(path);
+        const file = this.vault.getAbstractFileByPath(path) as TFile | null;
         if (!file) return;
 
         const content = await this.vault.read(file);
@@ -204,7 +203,7 @@ export class SyncEngine {
 
         // If file is open in editor, only skip if user has local edits (hash diverged)
         if (this._isOpenInEditor(path) && this._lastKnownHashes.has(path)) {
-            const localFile = this.vault.getAbstractFileByPath(path);
+            const localFile = this.vault.getAbstractFileByPath(path) as TFile | null;
             if (localFile) {
                 const localContent = await this.vault.read(localFile);
                 const localHash = await sha256(localContent);
@@ -215,28 +214,35 @@ export class SyncEngine {
             }
         }
 
-        // Suppress re-upload triggered by our own vault.modify (belt-and-suspenders with hash check)
+        // Suppress re-upload triggered by our own vault.modify
         this._suppressUpload.add(path);
-        setTimeout(() => this._suppressUpload.delete(path), 5000);
 
         // Set hash BEFORE vault write — modify event fires synchronously
         this._lastKnownHashes.set(path, data.hash);
 
-        const existing = this.vault.getAbstractFileByPath(path);
+        const existing = this.vault.getAbstractFileByPath(path) as TFile | null;
         console.log(`[zie] download WRITE path=${path} exists=${!!existing} len=${data.content.length}`);
-        if (existing) {
-            await this.vault.modify(existing, data.content);
-        } else {
-            // Ensure parent directories exist
-            const dirPath = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : '';
-            if (dirPath) {
-                const dir = this.vault.getAbstractFileByPath(dirPath);
-                if (!dir) {
-                    await this.vault.createFolder(dirPath);
+        try {
+            if (existing) {
+                await this.vault.modify(existing, data.content);
+            } else {
+                const dirPath = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : '';
+                if (dirPath) {
+                    const dir = this.vault.getAbstractFileByPath(dirPath);
+                    if (!dir) {
+                        await this.vault.createFolder(dirPath);
+                    }
                 }
+                await this.vault.create(path, data.content);
             }
-            await this.vault.create(path, data.content);
+        } catch (e) {
+            this._lastKnownHashes.delete(path);
+            this._suppressUpload.delete(path);
+            throw e;
         }
+
+        // Start 5s suppress window AFTER write completes, so long downloads don't expire it
+        setTimeout(() => this._suppressUpload.delete(path), 5000);
 
         this._notify(`↓ ${path}`);
         console.log(`[zie] download DONE path=${path}`);

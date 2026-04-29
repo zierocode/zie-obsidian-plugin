@@ -50,14 +50,15 @@ export default class ZieObsidianPlugin extends Plugin {
 
         this.addSettingTab(new ZieObsidianSettingTab(this.app, this));
 
+        const aiClient = new AIClient(this.settings.serverUrl, this.settings.apiKey);
+
         this.registerView(AI_SIDEBAR_VIEW_TYPE,
-            (leaf) => new AISidebarView(leaf, this.settings.serverUrl, this.settings.apiKey));
+            (leaf) => new AISidebarView(leaf, aiClient));
 
         this.addRibbonIcon('bot', 'Open zie-obsidian AI', () => {
             this.activateView();
         });
 
-        const aiClient = new AIClient(this.settings.serverUrl, this.settings.apiKey);
         registerCommands(this, aiClient);
 
         this.addCommand({
@@ -104,6 +105,7 @@ export default class ZieObsidianPlugin extends Plugin {
         // Kick off sync in background — don't block onload
         this.syncEngine.fullSync().catch(e => {
             console.error('zie-obsidian: initial sync failed', e);
+            new Notice('zie-obsidian: initial sync failed — check server connection', 5000);
         });
     }
 

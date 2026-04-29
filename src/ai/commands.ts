@@ -1,4 +1,4 @@
-import { MarkdownView, Editor } from 'obsidian';
+import { MarkdownView, Editor, Notice } from 'obsidian';
 import { AIClient } from './client';
 
 export const COMMANDS = [
@@ -22,12 +22,19 @@ export function registerCommands(plugin: any, aiClient: AIClient) {
                 const selection = editor.getSelection() || editor.getValue();
                 if (!selection.trim()) return;
 
-                const result = await aiClient.runCommand(cmd.command, selection);
-                if (cmd.mode === 'replace') {
-                    editor.replaceSelection(result);
-                } else {
-                    const cursor = editor.getCursor('to');
-                    editor.replaceRange(`\n\n${result}`, cursor);
+                const notice = new Notice(`zie: ${cmd.name}...`, 0);
+                try {
+                    const result = await aiClient.runCommand(cmd.command, selection);
+                    notice.hide();
+                    if (cmd.mode === 'replace') {
+                        editor.replaceSelection(result);
+                    } else {
+                        const cursor = editor.getCursor('to');
+                        editor.replaceRange(`\n\n${result}`, cursor);
+                    }
+                } catch {
+                    notice.hide();
+                    new Notice(`zie: ${cmd.name} failed`, 3000);
                 }
             }
         });

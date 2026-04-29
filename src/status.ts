@@ -31,6 +31,6 @@ export class SyncStatusBar {
 
     setIdle() {
         this._dot.className = 'zie-dot zie-dot-green';
-        this._text.setText('Live');
+        this._text.setText('Synced');
     }
 }

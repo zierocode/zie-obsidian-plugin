@@ -1,17 +1,32 @@
+import { Vault, TFile } from 'obsidian';
+import { sha256 } from '../utils/hash';
+
 export interface FileChange {
     path: string;
     hash: string;
     modified: number;
 }
 
-export async function getLocalFiles(vault: any): Promise<Map<string, {hash: string; mtime: number}>> {
+export async function getLocalFiles(vault: Vault): Promise<Map<string, {hash: string; mtime: number}>> {
     const files = new Map<string, {hash: string; mtime: number}>();
     const markdowns = vault.getMarkdownFiles();
-    for (const f of markdowns) {
-        const content = await vault.read(f);
-        const { sha256 } = await import('../utils/hash');
-        const hash = await sha256(content);
-        files.set(f.path, {hash, mtime: f.stat.mtime});
+
+    // Hash in parallel chunks of 5 to avoid overwhelming crypto.subtle
+    const chunks: TFile[][] = [];
+    for (let i = 0; i < markdowns.length; i += 5) {
+        chunks.push(markdowns.slice(i, i + 5));
+    }
+    for (const chunk of chunks) {
+        const results = await Promise.all(
+            chunk.map(async (f) => {
+                const content = await vault.read(f);
+                const hash = await sha256(content);
+                return { path: f.path, hash, mtime: f.stat.mtime };
+            })
+        );
+        for (const r of results) {
+            files.set(r.path, { hash: r.hash, mtime: r.mtime });
+        }
     }
     return files;
 }
@@ -28,7 +43,7 @@ export function computeDiff(local: Map<string, {hash: string; mtime: number}>,
         }
     }
 
-    for (const [path, _info] of local) {
+    for (const [path] of local) {
         const rf = remote.find(r => r.path === path);
         if (!rf && !path.startsWith('.')) {
             toUpload.push(path);
