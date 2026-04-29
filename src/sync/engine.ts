@@ -1,3 +1,4 @@
+import { Notice } from 'obsidian';
 import { SyncTransport } from './transport';
 import { getLocalFiles, computeDiff } from './differ';
 import { retry } from '../utils/retry';
@@ -33,9 +34,8 @@ export class SyncEngine {
     private _pendingUploads = new Map<string, Promise<void>>();
     private _pendingDownloads = new Map<string, Promise<void>>();
     private _lastKnownHashes = new Map<string, string>();
-    private _messageQueue: any[] = [];
-    private _processingQueue = false;
     private _pollTimer: ReturnType<typeof setInterval> | null = null;
+    private _noticeCount = 0;
 
     onStatusChange?: (status: SyncStatus) => void;
 
@@ -66,6 +66,15 @@ export class SyncEngine {
     stop() {
         this._stopPolling();
         this.transport.disconnect();
+    }
+
+    private _notify(msg: string) {
+        // Rate-limit notices to avoid spam (max 1 per 2 seconds)
+        this._noticeCount++;
+        if (this._noticeCount <= 3 || this._noticeCount % 10 === 0) {
+            new Notice(`zie: ${msg}`, 3000);
+        }
+        console.log(`[zie] ${msg}`);
     }
 
     private _startPolling() {
@@ -122,8 +131,12 @@ export class SyncEngine {
         const content = await this.vault.read(file);
         const hash = await sha256(content);
 
-        if (this._lastKnownHashes.get(path) === hash) return;
+        if (this._lastKnownHashes.get(path) === hash) {
+            console.log(`[zie] upload SKIP hash-match path=${path}`);
+            return;
+        }
 
+        this._notify(`↑ ${path}`);
         const resp = await fetch(`${serverUrl}/api/vault/write`, {
             method: 'PUT',
             headers: {
@@ -140,10 +153,16 @@ export class SyncEngine {
     // --- Download with hash tracking ---
 
     async downloadFile(path: string): Promise<void> {
-        if (this._pendingDownloads.has(path)) { console.log(`[zie] downloadFile: SKIP pending path=${path}`); return; }
-        if (this._isOpenInEditor(path)) { console.log(`[zie] downloadFile: SKIP openInEditor path=${path}`); return; }
+        if (this._pendingDownloads.has(path)) {
+            console.log(`[zie] download SKIP pending path=${path}`);
+            return;
+        }
+        if (this._isOpenInEditor(path)) {
+            console.log(`[zie] download SKIP open-in-editor path=${path}`);
+            return;
+        }
 
-        console.log(`[zie] downloadFile: start path=${path}`);
+        console.log(`[zie] download START path=${path}`);
         const promise = this._doDownload(path);
         this._pendingDownloads.set(path, promise);
         try {
@@ -155,7 +174,6 @@ export class SyncEngine {
 
     private async _doDownload(path: string): Promise<void> {
         const { serverUrl, apiKey } = this.settings;
-        console.log(`[zie] _doDownload: fetching path=${path}`);
         const resp = await fetch(
             `${serverUrl}/api/vault/read?path=${encodeURIComponent(path)}`,
             { headers: { 'Authorization': `Bearer ${apiKey}` } },
@@ -163,61 +181,56 @@ export class SyncEngine {
         if (!resp.ok) throw new Error(`download failed: ${resp.status}`);
 
         const data = await resp.json();
-        console.log(`[zie] _doDownload: got path=${path} hasContent=${!!data.content} serverHash=${data.hash?.slice(0,8)} localHash=${this._lastKnownHashes.get(path)?.slice(0,8)}`);
+        console.log(`[zie] download GOT path=${path} content=${!!data.content} serverHash=${data.hash?.slice(0,8)} localHash=${this._lastKnownHashes.get(path)?.slice(0,8)}`);
 
-        if (!data.content) { console.log(`[zie] _doDownload: SKIP no content`); return; }
-
-        if (this._lastKnownHashes.get(path) === data.hash) {
-            console.log(`[zie] _doDownload: SKIP hash match`);
+        if (!data.content) {
+            console.log(`[zie] download SKIP no-content path=${path}`);
             return;
         }
 
-        // Set hash BEFORE writing to vault — modify event fires synchronously
-        // and we need the hash guard active before _scheduleUpload triggers
+        if (this._lastKnownHashes.get(path) === data.hash) {
+            console.log(`[zie] download SKIP hash-match path=${path}`);
+            return;
+        }
+
+        // Set hash BEFORE vault write — modify event fires synchronously
         this._lastKnownHashes.set(path, data.hash);
 
         const existing = this.vault.getAbstractFileByPath(path);
-        console.log(`[zie] _doDownload: writing existing=${!!existing}`);
+        console.log(`[zie] download WRITE path=${path} exists=${!!existing} len=${data.content.length}`);
         if (existing) {
             await this.vault.modify(existing, data.content);
         } else {
+            // Ensure parent directories exist
+            const dirPath = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : '';
+            if (dirPath) {
+                const dir = this.vault.getAbstractFileByPath(dirPath);
+                if (!dir) {
+                    await this.vault.createFolder(dirPath);
+                }
+            }
             await this.vault.create(path, data.content);
         }
 
-        console.log(`[zie] _doDownload: DONE path=${path}`);
+        this._notify(`↓ ${path}`);
+        console.log(`[zie] download DONE path=${path}`);
     }
 
-    // --- Message queue (never drops) ---
+    // --- Direct message handling (no queue — downloadFile has internal guards) ---
 
-    async handleMessage(msg: any) {
-        console.log(`[zie] WS msg: type=${msg.type} path=${msg.path} queue=${this._messageQueue.length + 1}`);
-        this._messageQueue.push(msg);
-        if (!this._processingQueue) {
-            this._processQueue();
-        }
-    }
-
-    private async _processQueue() {
-        this._processingQueue = true;
-        try {
-            while (this._messageQueue.length > 0) {
-                const msg = this._messageQueue.shift()!;
-                console.log(`[zie] processQueue: type=${msg.type} path=${msg.path} remaining=${this._messageQueue.length}`);
-                try {
-                    if (msg.type === 'file_changed') {
-                        await this.downloadFile(msg.path);
-                    } else if (msg.type === 'file_deleted') {
-                        if (!this._isOpenInEditor(msg.path)) {
-                            const file = this.vault.getAbstractFileByPath(msg.path);
-                            if (file) await this.vault.trash(file, true);
-                        }
-                    }
-                } catch (e) {
-                    console.error('[zie] handleMessage error', e);
+    handleMessage(msg: any) {
+        console.log(`[zie] WS-IN type=${msg.type} path=${msg.path}`);
+        if (msg.type === 'file_changed') {
+            this.downloadFile(msg.path).catch(e => {
+                console.error('[zie] download error', e);
+            });
+        } else if (msg.type === 'file_deleted') {
+            if (!this._isOpenInEditor(msg.path)) {
+                const file = this.vault.getAbstractFileByPath(msg.path);
+                if (file) {
+                    this.vault.trash(file, true).catch(() => {});
                 }
             }
-        } finally {
-            this._processingQueue = false;
         }
     }
 

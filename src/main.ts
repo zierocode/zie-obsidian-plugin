@@ -25,11 +25,12 @@ export default class ZieObsidianPlugin extends Plugin {
         if (!db) {
             const delay = this._isIcloudVault ? 2000 : 300;
             db = debounce(async (p: string) => {
-                this._uploadDebouncers.delete(p);
                 try {
                     await this.syncEngine.uploadFile(p);
                 } catch (e) {
                     console.error('zie-obsidian: upload failed', e);
+                } finally {
+                    this._uploadDebouncers.delete(p);
                 }
             }, delay, true);
             this._uploadDebouncers.set(path, db);
