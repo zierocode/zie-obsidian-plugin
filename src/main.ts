@@ -14,11 +14,12 @@ export default class ZieObsidianPlugin extends Plugin {
         await this.loadSettings();
 
         // Unique device ID for multi-device sync
-        if (!this.settings.deviceId) {
-            this.settings.deviceId = Math.random().toString(36).slice(2, 10);
+        this.deviceId = this.settings.deviceId;
+        if (!this.deviceId) {
+            this.deviceId = Math.random().toString(36).slice(2, 10);
+            this.settings.deviceId = this.deviceId;
             await this.saveSettings();
         }
-        this.deviceId = this.settings.deviceId;
 
         this.addSettingTab(new ZieObsidianSettingTab(this.app, this));
 
